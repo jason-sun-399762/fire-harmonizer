@@ -1,0 +1,69 @@
+# Fire Harmonizer pipeline configuration.
+# Every number that changes a result lives here, never in code.
+# Values marked "placeholder" still need to be set from data (see protocol, threshold table).
+
+version: v2
+
+grid:
+  kind: latlon          # latlon | h3
+  res_deg: 0.25         # used when kind = latlon
+  h3_res: 5             # used when kind = h3
+
+time:
+  step: month           # month | week
+  local_solar: true     # local solar time = UTC + lon/15 h
+  # week index = min(doy0 // 7, 51), doy0 = day of year counted from 0
+
+record:
+  start: "2002-07-04"   # first Aqua MODIS data
+
+target:
+  sensor: aqua
+  definition: pixel_days_l3   # pixel_days_l3 (from MYD14A1) | firms_detections
+
+filters:
+  firms_types_keep: [0]        # 0 = presumed vegetation fire; drops volcano, static, offshore
+  modis_conf_cutoffs: [30, 80] # MODIS 0-100 -> low < 30 <= nominal < 80 <= high
+  min_conf_class:              # keep detections at or above this class
+    modis: nominal
+    viirs: nominal
+  persistent:                  # placeholder: calibrate from the days-lit distribution
+    min_days_per_year: 30
+    min_years: 3
+    pixel_deg: 0.01            # ~1 km bins for persistence counting
+  min_land_fraction: 0.5
+
+firemask:                      # MxD14A1 / VNP14A1 / VJ114A1 FireMask classes
+  clear: [3, 5, 7, 8, 9]       # water, non-fire land, fire
+  land_clear: [5, 7, 8, 9]
+  cloud: [4]
+  fire: [7, 8, 9]
+
+calibration:
+  window_start: "2012-01-19"   # S-NPP VIIRS first data
+  window_end: "2023-01-31"     # Aqua passed its 13:45 crossing limit in Feb 2023
+  snpp_end: "2026-11-02"       # S-NPP stopped delivering data
+
+features:
+  veg_lag_months: 1
+  landcover_lag_years: 1
+
+events:
+  max_gap_days: 2              # placeholder: tune 1-5 against GFA / FEDS
+  link_km: 1.0                 # placeholder: tune 0.5-2
+
+cv:
+  folds: 5
+  seed: 42
+  block_latlon_deg: 10         # spatial block size for latlon grids
+  block_h3_res: 1              # parent resolution for h3 grids
+  backtest_years: [2019, 2020, 2021]
+
+qc:
+  burned_area_rel_tol: 0.005
+  population_rel_tol: 0.01
+
+r2:
+  endpoint: "https://e87f95cd9e0a7a00e4507307212d43a2.r2.cloudflarestorage.com"
+  bucket: nsa-firms
+  out_prefix: features        # outputs go to features/<version>/<grid name>/<dataset>/
