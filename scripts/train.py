@@ -208,7 +208,8 @@ def peak_month_agreement(te: pd.DataFrame, mu: np.ndarray, min_fires: float = 20
     return {"peak_exact": float((d == 0).mean()), "peak_within1": float((d <= 1).mean()), "peak_cells": int(d.size)}
 
 
-def run_cv(F, rounds, med, folds) -> pd.DataFrame:
+def run_cv(F, rounds, med, folds, outdir: Path | None = None) -> pd.DataFrame:
+    import gc
     rows = []
     for f in sorted(np.unique(folds)):
         tr, te = F[folds != f], F[folds == f]
@@ -220,6 +221,12 @@ def run_cv(F, rounds, med, folds) -> pd.DataFrame:
             mu = m.predict(te)
             rows.append({"model": m.name, "fold": int(f), **score(te.y, mu), "fit_s": round(time.time() - t, 1)})
             log(f"  cv fold {f} {m.name}: dev {rows[-1]['deviance']:.4f} bias {rows[-1]['rel_bias']:+.3f} ({rows[-1]['fit_s']} s)")
+            del m, mu
+            gc.collect()
+        del tr, te
+        gc.collect()
+        if outdir is not None:
+            pd.DataFrame(rows).to_csv(outdir / "cv_folds_partial.csv", index=False)   # survive a crash
     return pd.DataFrame(rows)
 
 
@@ -279,7 +286,7 @@ def main():
 
     if "cv" in stages:
         log("stage cv: 5-fold spatial-block CV of the model ladder")
-        cvr = run_cv(F, args.rounds, med, d.fold.to_numpy())
+        cvr = run_cv(F, args.rounds, med, d.fold.to_numpy(), outdir)
         cvr.to_csv(outdir / "cv_folds.csv", index=False)
         summ = summarize(cvr)
         for mtr in ("rel_bias", "r2_log"):
