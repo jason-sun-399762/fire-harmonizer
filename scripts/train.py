@@ -60,6 +60,7 @@ TABLE_COLS = (["cell", "ym", "year", "month", "lat", "lon", "fold", "persistent"
               + ["ndvi_s_lag1", "ndvi_j_lag1", "evi_s_lag1", "evi_j_lag1"]
               + [f for g, fs in GROUPS.items() if g not in ("vegetation", "location", "season") for f in fs])
 MIN_COMPLETE = 0.9
+GLM_MAX_ROWS = 3_000_000
 EXPOSURE_SCALE_MAX = 3.0
 
 
@@ -149,6 +150,10 @@ class GLMWrap(PoissonGLM):
         self.med = med
 
     def fit(self, df):
+        # 9 coefficients do not need 20M rows; statsmodels holds several copies of the design
+        # matrix (OOM on EC2 with two runs at once), so fit on a fixed random subset.
+        if len(df) > GLM_MAX_ROWS:
+            df = df.sample(GLM_MAX_ROWS, random_state=0)
         return super().fit(glm_frame(df, self.med))
 
     def predict(self, df):
