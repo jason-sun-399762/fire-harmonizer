@@ -37,6 +37,7 @@ from firecal.provenance import output_key, write_parquet  # noqa: E402
 from firecal.qc import check_range, check_rel  # noqa: E402
 from firecal.rasters import CMG_005, regridded_area_mean, regridder, source_area_mean  # noqa: E402
 
+MIN_DAILY_FRAC = 0.8   # GFWED: use MERRA-2 daily for a month if >= 80% of its days exist
 RANGES = {"ndvi": (-1, 1), "evi": (-1, 1), "tair_c": (-90, 60), "rh_pct": (0, 100), "vpd_kpa": (0, 10),
           "precip_mm_day": (0, 500), "wind_ms": (0, 60), "fwi_mean": (0, 500), "season_length": (0, 731)}
 
@@ -182,7 +183,14 @@ class Builder:
         geos_an = defaultdict(list)   # GEOS-5 daily analysis files (date only in the name)
         geos = defaultdict(list)      # GEOS-5 day-1 forecasts (init + valid date in the name)
         monthly = {}
-        for k in self.keys("raw/GFWED/", (".nc",)):
+        empty = []
+        for o in io_r2.list_keys(self.cfg, "raw/GFWED/"):
+            k = o["key"]
+            if not k.endswith(".nc"):
+                continue
+            if o["size"] == 0:            # broken upload (e.g. MERRA2 20250812): never let it count
+                empty.append(k)
+                continue
             name = Path(k).name
             if ".Monthly." in name:
                 m = int(re.search(r"\.(\d{6})\.nc$", name).group(1))
@@ -201,6 +209,10 @@ class Builder:
                 if lead == 1:
                     geos[int(valid[:6])].append(k)
         months = sorted(set(merra) | set(geos_an) | set(geos) | set(monthly))
+        for k in empty:
+            if P.product_ym(Path(k).name) // 100 in self.args.years:
+                self.skipped.append((k, "empty file (0 bytes)"))
+                print(f"  skipped empty file {k}", flush=True)
         by_year = defaultdict(list)
         for m in months:
             if m // 100 in self.args.years:
@@ -209,7 +221,9 @@ class Builder:
             parts, inputs = [], []
             for m in ms:
                 ndays = pd.Period(f"{m // 100}-{m % 100:02d}").days_in_month
-                if len(merra[m]) >= ndays:
+                # MERRA-2 with a few missing days beats switching source: fwi_ndays records the
+                # days used, so days_gt30 can be read as a fraction (days_gt30 / ndays).
+                if len(merra[m]) >= int(np.ceil(MIN_DAILY_FRAC * ndays)):
                     ks, src = merra[m], "MERRA2_daily"
                 elif len(geos_an[m]) >= ndays - 2:
                     ks, src = geos_an[m], "GEOS5_analysis"
