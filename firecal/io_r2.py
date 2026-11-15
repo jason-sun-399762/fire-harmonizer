@@ -38,10 +38,19 @@ def list_keys(cfg: dict, prefix: str, limit: int | None = None) -> list[dict]:
         token = resp["NextContinuationToken"]
 
 
-def download(cfg: dict, key: str, dest: str | Path) -> Path:
+def download(cfg: dict, key: str, dest: str | Path, retries: int = 3) -> Path:
+    """Download and verify the local size equals the object's size; retry on a short read."""
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    client(cfg).download_file(bucket(cfg), key, str(dest))
+    s3 = client(cfg)
+    expected = s3.head_object(Bucket=bucket(cfg), Key=key)["ContentLength"]
+    for attempt in range(1, retries + 1):
+        s3.download_file(bucket(cfg), key, str(dest))
+        got = dest.stat().st_size
+        if got == expected:
+            return dest
+        if attempt == retries:
+            raise OSError(f"{key}: downloaded {got} of {expected} bytes after {retries} attempts")
     return dest
 
 

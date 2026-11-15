@@ -66,6 +66,17 @@ class Builder:
         self.cfg = load_config()
         self.grid = make_grid(self.cfg)
         self.tmp = tempfile.TemporaryDirectory()
+        self.skipped: list[tuple[str, str]] = []
+
+    def read(self, key: str, fn, *a, **kw):
+        """Download + read one input; an unreadable file (truncated upload, bad HDF) is logged and
+        skipped instead of stopping the run. Returns None when skipped."""
+        try:
+            return fn(self.fetch(key), *a, **kw)
+        except (OSError, ValueError, KeyError) as e:
+            self.skipped.append((key, str(e)[:200]))
+            print(f"  SKIPPED unreadable input {key}: {str(e)[:120]}", flush=True)
+            return None
 
     def fetch(self, key: str, clear: bool = True) -> Path:
         """Download into a scratch dir; by default it holds one file at a time (global files are large).
@@ -79,7 +90,9 @@ class Builder:
         check_ranges(df)
         key = output_key(self.cfg, self.grid.name, dataset, str(year))
         local = ROOT / "out" / key
-        write_parquet(df, local, self.cfg, dataset, inputs=inputs)
+        bad = [k for k, _ in self.skipped if k in set(inputs)]
+        write_parquet(df, local, self.cfg, dataset, inputs=[k for k in inputs if k not in bad],
+                      extra={"skipped_inputs": bad})
         msg = f"  {dataset} {year}: {len(df):,} rows, {df['cell'].nunique():,} cells -> {local.relative_to(ROOT)}"
         if self.args.upload:
             io_r2.upload(self.cfg, local, key)
@@ -101,11 +114,14 @@ class Builder:
         for y, ks in sorted(by_year.items()):
             parts = []
             for k in ks:
-                vi = P.read_vi_cmg(self.fetch(k))
+                vi = self.read(k, P.read_vi_cmg)
+                if vi is None:
+                    continue
                 df = P.to_cells({"ndvi": vi["ndvi"], "evi": vi["evi"]}, CMG_005, self.grid)
                 conserve(k, vi["ndvi"], CMG_005, df, "ndvi", self.grid)
                 parts.append(df.assign(ym=P.product_ym(k), source=prod))
-            self.done(f"ndvi_{prod.lower()}", y, pd.concat(parts, ignore_index=True), ks)
+            if parts:
+                self.done(f"ndvi_{prod.lower()}", y, pd.concat(parts, ignore_index=True), ks)
 
     def pheno(self):
         prod = self.args.product or "VNP22C2"
@@ -113,7 +129,9 @@ class Builder:
             y = P.product_year(k)
             if y not in self.args.years:
                 continue
-            ph = P.read_phenology_cmg(self.fetch(k))
+            ph = self.read(k, P.read_phenology_cmg)
+            if ph is None:
+                continue
             df = P.to_cells(ph, CMG_005, self.grid, circular=("greenup_doy", "senescence_doy", "dormancy_doy"))
             conserve(k, ph["season_length"], CMG_005, df, "season_length", self.grid)
             self.done(f"pheno_{prod.lower()}", y, df.assign(year=y, source=prod), [k])
@@ -123,7 +141,9 @@ class Builder:
             y = P.product_year(k)
             if y not in self.args.years:
                 continue
-            pct = P.read_landcover_cmg(self.fetch(k))
+            pct = self.read(k, P.read_landcover_cmg)
+            if pct is None:
+                continue
             df = P.landcover_to_cells(pct, self.grid, P.LC_GROUPS)
             frac_cols = [c for c in df.columns if c.startswith("lc_") and c != "lc_valid"]
             s = df[frac_cols].sum(axis=1) + (1 - df["land_frac"])
@@ -144,11 +164,15 @@ class Builder:
         for y, items in sorted(by_year.items()):
             parts = []
             for m, k, src in sorted(items):
-                fields, spec = P.read_gldas(self.fetch(k))
+                got = self.read(k, P.read_gldas)
+                if got is None:
+                    continue
+                fields, spec = got
                 df = P.to_cells(fields, spec, self.grid)
                 conserve(k, fields["tair_c"], spec, df, "tair_c", self.grid)
                 parts.append(df.assign(ym=m, source=src))
-            self.done("gldas", y, pd.concat(parts, ignore_index=True), [i[1] for i in items])
+            if parts:
+                self.done("gldas", y, pd.concat(parts, ignore_index=True), [i[1] for i in items])
 
     def gfwed(self):
         """Per month, the first complete source wins: MERRA-2 daily, GEOS-5 daily analysis,
@@ -196,11 +220,16 @@ class Builder:
                 else:
                     print(f"  gfwed {m}: no complete source, skipped", flush=True)
                     continue
-                paths = [self.fetch(k, clear=(i == 0)) for i, k in enumerate(ks)]
-                if src == "monthly_mean":
-                    fields, spec = P.read_gfwed_monthly(paths[0])
-                else:
-                    fields, spec = P.gfwed_month(paths)
+                try:
+                    paths = [self.fetch(k, clear=(i == 0)) for i, k in enumerate(ks)]
+                    if src == "monthly_mean":
+                        fields, spec = P.read_gfwed_monthly(paths[0])
+                    else:
+                        fields, spec = P.gfwed_month(paths)
+                except (OSError, ValueError, KeyError) as e:
+                    self.skipped += [(k, str(e)[:200]) for k in ks]
+                    print(f"  SKIPPED gfwed {m} ({src}): {str(e)[:120]}", flush=True)
+                    continue
                 df = P.to_cells(fields, spec, self.grid)
                 conserve(f"gfwed {m}", fields["fwi_mean"], spec, df, "fwi_mean", self.grid)
                 parts.append(df.assign(ym=m, source=src))
@@ -221,7 +250,9 @@ def main():
     t = time.time()
     b = Builder(args)
     getattr(b, args.dataset)()
-    print(f"done in {time.time() - t:.0f} s")
+    print(f"done in {time.time() - t:.0f} s; skipped inputs: {len(b.skipped)}")
+    for k, e in b.skipped:
+        print(f"  skipped {k}: {e}")
 
 
 if __name__ == "__main__":
