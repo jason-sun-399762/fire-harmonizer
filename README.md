@@ -9,7 +9,7 @@ It follows the team's Data Fusion & Harmonization Protocol: every rule and thres
 ```bash
 python -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
 pip install -r requirements.txt                          # pyhdf on Windows: conda install -c conda-forge pyhdf
-python -m pytest -q                                      # 33 tests, ~5 s
+python -m pytest -q                                      # 43 tests, ~25 s
 python scripts/dry_run.py                                # synthetic end-to-end run, ~8 s
 python scripts/bench.py                                  # throughput check
 ```
@@ -66,8 +66,33 @@ so the existing `features/v1/h3r5/` files are never overwritten.
 
 Throughput (2 vCPU): 2M FIRMS points standardized + filtered + gridded in ~7 s; one 8-day FireMask tile in ~0.3 s.
 
+## Covariates from R2
+
+```bash
+python scripts/build_covariates.py ndvi --product VNP13C2 --years 2012-2026   # S-NPP NDVI/EVI, 0.05 deg monthly
+python scripts/build_covariates.py ndvi --product VJ113C2 --years 2018-2026   # NOAA-20 NDVI/EVI
+python scripts/build_covariates.py pheno --years 2013-2025                    # VNP22C2 green-up / senescence / dormancy
+python scripts/build_covariates.py landcover --years 2001-2025                # MCD12C1 -> 8 groups + land_frac
+python scripts/build_covariates.py gldas --years 2000-2026                    # temp, RH, VPD, wind, precip, soil moisture
+python scripts/build_covariates.py gfwed --years 2000-2026                    # FWI mean / p90 / days > 30, FFMC, DMC, DC, ISI, BUI
+```
+
+Output: `out/features/v2/ll0p25/<dataset>/<year>.parquet`; add `--upload` to write the same key to R2.
+Each file is regridded through a cached sparse overlap matrix. The script stops if the area-weighted
+mean changes during regridding by more than 1e-6.
+
+Tested on real bucket files (2 vCPU): NDVI 2020 in 60 s, land cover 2020 in 29 s, phenology 2020 in 17 s,
+GLDAS 2000-2001 in 41 s, GFWED 2026 in 6 min (mostly downloading ~300 daily files). GFWED is the slow
+one, so run it in parallel by year range: `--years 2000-2004`, `--years 2005-2009`, and so on.
+
+GFWED source per month: MERRA-2 daily, then GEOS-5 daily analysis, then GEOS-5 day-1 forecast, then a
+monthly-mean file; the `source` column records which. **GEOS-5 needs calibrating before use:** on the same
+month (July 2025) and cells it correlates 0.95 with MERRA-2 but reads ~22% lower, more in the most
+fire-prone cells. MERRA-2 daily ends April 2026, so May 2026 onward is GEOS-5.
+
 ## Known limits
 
 - `n_pixel_days` from FIRMS uses fixed ~1 km bins, so two detections of one pixel can straddle a bin edge. The target therefore uses MYD14A1's own pixel grid.
 - H3 cell ids are computed point by point (~0.8M points/s). Fine for aggregates; for the full VIIRS archive prefer `latlon`, or vectorize with h3ronpy.
-- Readers for GLDAS, GFWED, MCD12Q1, MOD44B, VNP13A3 and the other covariates are next; the aggregation rules they will call are already tested.
+- VIIRS VI pixel reliability is read but not filtered on yet (rank meanings still need checking in the user guide).
+- Not yet read: VJ114A1 / VNP14A1 / MYD14A1 runs at scale (reader done, waiting on the global pulls), MOD44B, NASADEM/GMTED, GPW, gROADS, VNP46A4 / VJ146A4, GEDI, Global Fire Atlas.

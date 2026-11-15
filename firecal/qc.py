@@ -22,12 +22,14 @@ def check_rel(name: str, before: float, after: float, rel_tol: float) -> None:
         raise QCError(f"{name}: relative difference {rel:.4%} exceeds {rel_tol:.4%}")
 
 
-def check_range(name: str, values, lo: float, hi: float, allow_nan: bool = True) -> None:
+def check_range(name: str, values, lo: float, hi: float, allow_nan: bool = True, rtol: float = 1e-9) -> None:
+    """Values must lie in [lo, hi]; a relative float tolerance absorbs rounding in weighted means."""
     v = np.asarray(values, dtype=float)
     finite = np.isfinite(v)
     if not allow_nan and not finite.all():
         raise QCError(f"{name}: {int((~finite).sum())} missing values")
-    bad = finite & ((v < lo) | (v > hi))
+    tol = rtol * max(abs(lo), abs(hi), 1.0)
+    bad = finite & ((v < lo - tol) | (v > hi + tol))
     if bad.any():
         raise QCError(f"{name}: {int(bad.sum())} values outside [{lo}, {hi}]")
 
