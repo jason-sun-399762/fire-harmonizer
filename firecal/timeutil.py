@@ -36,7 +36,7 @@ def add_time_keys(df: pd.DataFrame, local_col: str = "local_time") -> pd.DataFra
     out["year"] = lt.dt.year.astype(np.int16)
     out["month"] = lt.dt.month.astype(np.int8)
     out["ym"] = (out["year"].astype(np.int32) * 100 + out["month"]).astype(np.int32)
-    out["doy0"] = (lt.dt.dayofyear - 1).astype(np.int16)
+    out["doy0"] = (lt.dt.day_of_year - 1).astype(np.int16)
     out["week"] = week_of_year(out["doy0"]).astype(np.int8)
     return out
 
