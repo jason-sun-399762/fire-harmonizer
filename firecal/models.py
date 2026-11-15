@@ -76,18 +76,26 @@ class PoissonGLM:
         e = _exposure(df)
         m = e > 0
         off = np.log(e[m]) if self.offset else None
-        self.res_ = sm.GLM(df["y"].to_numpy(float)[m], self._X(df[m]), family=sm.families.Poisson(), offset=off).fit()
+        res = sm.GLM(df["y"].to_numpy(float)[m], self._X(df[m]), family=sm.families.Poisson(), offset=off).fit()
+        self.params_ = np.asarray(res.params)       # keep only the coefficients: results hold the whole design matrix
+        self.bse_ = np.asarray(res.bse)
+        del res
         return self
 
     def predict(self, df):
         e = _exposure(df)
-        eta = self._X(df) @ self.res_.params
+        eta = self._X(df) @ self.params_
         mu = np.exp(np.clip(eta, -50, 50))
         return np.where(e > 0, mu * (e if self.offset else 1.0), 0.0)
 
 
 class LightGBMModel:
-    """Gradient boosting (Tweedie or Poisson) with log(exposure) as a fixed offset (init_score)."""
+    """Gradient boosting (Tweedie or Poisson) on the rate y/exposure with weight = exposure.
+
+    For Poisson this is the same likelihood as a log(exposure) offset, but training starts from
+    the weighted mean rate (boost_from_average). An init_score offset starts every tree path at
+    rate 1 and needs hundreds of rounds just to reach the right level (found 2026-11-14: x15 bias
+    at 100 rounds on real data)."""
 
     name = "5_lightgbm"
 
@@ -118,16 +126,18 @@ class LightGBMModel:
 
         e = _exposure(df)
         m = e > 0
-        init = np.log(e[m]) if self.offset else None
-        ds = lgb.Dataset(df.loc[m, self.features], label=df["y"].to_numpy(float)[m], init_score=init)
+        y = df["y"].to_numpy(float)[m]
+        if self.offset:
+            ds = lgb.Dataset(df.loc[m, self.features], label=y / e[m], weight=e[m])
+        else:
+            ds = lgb.Dataset(df.loc[m, self.features], label=y)
         self.booster_ = lgb.train(self.params, ds, num_boost_round=self.rounds)
         return self
 
     def predict(self, df):
         e = _exposure(df)
-        raw = self.booster_.predict(df[self.features], raw_score=True)
-        mu = np.exp(np.clip(raw + (np.log(np.where(e > 0, e, 1.0)) if self.offset else 0.0), -50, 50))
-        return np.where(e > 0, mu, 0.0)
+        mu = self.booster_.predict(df[self.features])
+        return np.where(e > 0, mu * (e if self.offset else 1.0), 0.0)
 
 
 # ---------- metrics ----------
