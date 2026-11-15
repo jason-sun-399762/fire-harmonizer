@@ -117,3 +117,20 @@ def test_parquet_provenance_roundtrip(tmp_path, cfg):
     meta = read_meta(p)
     assert meta["dataset"] == "demo" and meta["grid"]["kind"] == "latlon" and len(meta["config_hash"]) == 16
     assert pd.read_parquet(p).shape == (2, 2)
+
+
+def test_count_fast_matches_reference(cfg):
+    from firecal.firemask import METRICS, class_table, count_fast
+
+    m = np.stack([fake_mask(seed=5), fake_mask(seed=6)])
+    frp = np.where(np.isin(m, [7, 8, 9]), 2.5, 0.0).astype(np.float32)
+    dates = np.array(["2020-07-01", "2020-07-02"], dtype="datetime64[D]")
+    idx = TileCellIndex(LatLonGrid(0.25))
+    ref = count_tile(m, dates, 8, 5, idx, cfg)
+    cells, cnt = count_fast(m, frp, 8, 5, idx, class_table(cfg))
+    for k in range(2):
+        r = ref[ref["date"] == dates[k]].set_index("cell")
+        fast = pd.DataFrame(cnt[k].T, index=cells, columns=METRICS).loc[r.index]
+        for c in ["n_valid", "n_clear", "n_land_clear", "n_cloud", "n_fire"]:
+            assert np.array_equal(fast[c].to_numpy(), r[c].to_numpy())
+        assert np.allclose(fast["frp_fire_mw"], 2.5 * r["n_fire"])

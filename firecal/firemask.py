@@ -13,7 +13,7 @@ import pandas as pd
 
 from .sinusoidal import parse_date, parse_tile, pixel_centers
 
-VIIRS_FIREMASK = "/HDFEOS/GRIDS/VIIRS_Grid_Daily_Fire/Data_Fields/FireMask"
+VIIRS_FIREMASK = "/HDFEOS/GRIDS/VIIRS_Grid_Daily_Fire/Data Fields/FireMask"  # "Data Fields" has a space in real files
 
 
 def read_firemask(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
@@ -42,21 +42,31 @@ def read_firemask(path: str | Path) -> tuple[np.ndarray, np.ndarray]:
 
 
 class TileCellIndex:
-    """Cache of pixel -> cell ids for one tile, so each tile's geometry is computed once."""
+    """Pixel -> cell lookup per tile, computed once per tile and kept for the most recent
+    `max_tiles` tiles (process files grouped by tile so each tile is built once).
+    The local index is stored as uint16 when it fits (~3 MB per 1200 x 1200 tile)."""
 
-    def __init__(self, grid):
+    def __init__(self, grid, max_tiles: int = 8):
+        from collections import OrderedDict
+
         self.grid = grid
-        self._cache: dict[tuple[int, int, int], tuple[np.ndarray, np.ndarray]] = {}
+        self.max_tiles = max_tiles
+        self._cache: "OrderedDict[tuple[int, int, int], tuple[np.ndarray, np.ndarray]]" = OrderedDict()
 
     def get(self, h: int, v: int, n: int):
         key = (h, v, n)
-        if key not in self._cache:
-            lat, lon = pixel_centers(h, v, n)
-            ok = np.isfinite(lat).ravel()
-            cells = np.full(lat.size, -1, dtype=np.int64)
-            cells[ok] = self.grid.cell_of(lat.ravel()[ok], lon.ravel()[ok])
-            uniq, inv = np.unique(cells, return_inverse=True)
-            self._cache[key] = (uniq, inv)
+        if key in self._cache:
+            self._cache.move_to_end(key)
+            return self._cache[key]
+        lat, lon = pixel_centers(h, v, n)
+        ok = np.isfinite(lat).ravel()
+        cells = np.full(lat.size, -1, dtype=np.int64)
+        cells[ok] = self.grid.cell_of(lat.ravel()[ok], lon.ravel()[ok])
+        uniq, inv = np.unique(cells, return_inverse=True)
+        inv = inv.astype(np.uint16 if uniq.size < 65536 else np.int32)
+        self._cache[key] = (uniq, inv)
+        while len(self._cache) > self.max_tiles:
+            self._cache.popitem(last=False)
         return self._cache[key]
 
 
@@ -84,6 +94,64 @@ def count_tile(masks: np.ndarray, dates: np.ndarray, h: int, v: int, index: Tile
     for c in groups:
         out[c] = out[c].astype(np.int32)
     return out.reset_index(drop=True)
+
+
+METRICS = ("n_valid", "n_clear", "n_land_clear", "n_cloud", "n_fire", "frp_fire_mw")
+
+
+def class_table(cfg: dict) -> np.ndarray:
+    """uint8 FireMask class -> bit flags (valid, clear, land_clear, cloud, fire) as a 256 x 5 table."""
+    fm = cfg["firemask"]
+    t = np.zeros((256, 5), dtype=np.float64)
+    t[3:10, 0] = 1
+    for col, key in ((1, "clear"), (2, "land_clear"), (3, "cloud"), (4, "fire")):
+        t[fm[key], col] = 1
+    return t
+
+
+def read_firemask_frp(path: str | Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """FireMask plus MaxFRP (MW, scale 0.1) for any supported product: (masks, frp, dates)."""
+    name = Path(path).name
+    start = parse_date(name)
+    if name.upper().startswith(("MYD14A1", "MOD14A1")):
+        from pyhdf.SD import SD, SDC
+
+        sd = SD(str(path), SDC.READ)
+        try:
+            m = np.asarray(sd.select("FireMask")[:], dtype=np.uint8)
+            f = np.asarray(sd.select("MaxFRP")[:], dtype=np.float32) * 0.1
+        finally:
+            sd.end()
+        if m.ndim == 2:
+            m, f = m[None], f[None]
+        return m, f, start + np.arange(m.shape[0]).astype("timedelta64[D]")
+    import h5py
+
+    with h5py.File(path, "r") as h:
+        m = np.asarray(h[VIIRS_FIREMASK][:], dtype=np.uint8)
+        g = VIIRS_FIREMASK.rsplit("/", 1)[0] + "/MaxFRP"
+        f = np.asarray(h[g][:], dtype=np.float32) * 0.1 if g in h else np.zeros(m.shape, np.float32)
+    return m[None], f[None], np.array([start])
+
+
+def count_fast(masks: np.ndarray, frp: np.ndarray, h: int, v: int, index: TileCellIndex, table: np.ndarray):
+    """Vectorised per-day counts: one bincount per metric over a class lookup.
+    Returns (cells, counts[days, 6, ncells]) with metrics in METRICS order."""
+    uniq, inv = index.get(h, v, masks.shape[-1])
+    nd, nc = masks.shape[0], uniq.size
+    out = np.zeros((nd, len(METRICS), nc))
+    base = inv.astype(np.int64) * 16
+    fire_cls = np.flatnonzero(table[:, 4] > 0)
+    for k in range(nd):
+        m = masks[k].ravel()
+        # one integer pass: pixels per (cell, class); classes are 0-9, 16 slots leaves headroom
+        per_class = np.bincount(base + np.minimum(m, 15), minlength=nc * 16).reshape(nc, 16)
+        out[k, :5] = (per_class @ table[:16, :5]).T
+        fi = np.flatnonzero(np.isin(m, fire_cls))
+        if fi.size:
+            out[k, 5] = np.bincount(inv[fi], weights=np.nan_to_num(frp[k].ravel()[fi]), minlength=nc)
+    keep = uniq >= 0
+    return uniq[keep], out[:, :, keep]
 
 
 def count_file(path: str | Path, index: TileCellIndex, cfg: dict) -> pd.DataFrame:

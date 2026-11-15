@@ -15,7 +15,14 @@ def client(cfg: dict):
 
     if not (os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY")):
         raise RuntimeError("Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY (the R2 token) in the environment.")
-    return boto3.client("s3", region_name="auto", endpoint_url=os.environ.get("R2_ENDPOINT", cfg["r2"]["endpoint"]))
+    from botocore.config import Config
+
+    return boto3.client(
+        "s3",
+        region_name="auto",
+        endpoint_url=os.environ.get("R2_ENDPOINT", cfg["r2"]["endpoint"]),
+        config=Config(retries={"max_attempts": 10, "mode": "adaptive"}, max_pool_connections=64),
+    )
 
 
 def bucket(cfg: dict) -> str:
