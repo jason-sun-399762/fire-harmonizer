@@ -38,7 +38,7 @@ from firecal.qc import check_range, check_rel  # noqa: E402
 from firecal.rasters import CMG_005, regridded_area_mean, regridder, source_area_mean  # noqa: E402
 
 RANGES = {"ndvi": (-1, 1), "evi": (-1, 1), "tair_c": (-90, 60), "rh_pct": (0, 100), "vpd_kpa": (0, 10),
-          "precip_mm_day": (0, 500), "wind_ms": (0, 60), "fwi_mean": (0, 500), "season_length": (0, 400)}
+          "precip_mm_day": (0, 500), "wind_ms": (0, 60), "fwi_mean": (0, 500), "season_length": (0, 731)}
 
 
 def parse_years(s: str) -> list[int]:
