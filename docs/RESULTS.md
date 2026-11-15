@@ -1,7 +1,9 @@
-# Results v1 — VIIRS → MODIS-Aqua-equivalent fire record (2026-11-15)
+# Results — VIIRS → MODIS-Aqua-equivalent fire record (2026-11-15)
+
+**Product model: v2** (LightGBM without fire weather and phenology). v1 kept for comparison.
 
 All outputs are in R2 under `features/v2/ll0p25/`. Code: training table 615375f, training and
-scoring 98acc60..66d4582, calendar 90da87a (see `git log`).
+scoring 98acc60..66d4582, calendar 90da87a (see `git log`). Website/product files: `calendar_v2/`, `harmonized_v2/`, `pred_aqua_v2/`.
 
 ![Global land burning in MODIS-Aqua terms](figures/global_monthly.png)
 
@@ -53,9 +55,26 @@ Peak-month agreement is measured on the 66,625 cells with ≥ 20 Aqua fires in 2
 | phenology (VNP22C2) | −0.02 % |
 | persistent-source flag | +0.05 % |
 
-Fire weather and phenology add nothing. Both also cause problems after MODIS ends: GFWED switches to GEOS-5, which needs calibrating to MERRA-2, and phenology has no NOAA-20 version. They are therefore dropped in the reduced model v2 (`--drop-groups fire_weather,phenology`).
+Fire weather and phenology add nothing. Both also cause problems after MODIS ends: GFWED switches to GEOS-5, which needs calibrating to MERRA-2, and phenology has no NOAA-20 version. They are therefore dropped in the reduced model v2 (`--drop-groups fire_weather,phenology`), which is the product (see below).
 
-## Final model and the harmonized record
+## Reduced model v2 (the product)
+v2 is the same LightGBM without the fire-weather (GFWED) and phenology (VNP22C2) groups.
+Both groups have availability problems after MODIS ends.
+
+| | v1 (all inputs) | v2 (reduced) |
+|---|---|---|
+| CV deviance | 0.968 ± 0.053 | 0.968 ± 0.054 |
+| Back-test deviance | 0.908 | 0.908 |
+| Back-test block-month deviance | 17.4 | 17.6 |
+| Back-test peak month exact / ±1 | 74.3 % / 89.3 % | 74.3 % / 89.3 % |
+
+The per-fold difference is within ±0.005. Peak month is identical in 99.5 % of active cells.
+
+The two models differ only where the fire-weather input changes source. From May 2026 GFWED is GEOS-5, which reads ~22 % lower than MERRA-2 and was not yet calibrated. There, v1's predictions drop: v2/v1 = 1.015 in 2024 and 1.030 in 2026. Dropping the group removes this artifact at no cost in accuracy. v2 is therefore the product model.
+
+v2 against observed Aqua over 2012-01..2023-01: global monthly correlation 0.992, total −0.5 %, median monthly difference 1.4 %. The calendar from v2 has 123,562 active cells, and its activity-weighted trend is −0.77 % per year.
+
+## Final model and the harmonized record (v1 numbers; v2 above)
 - **Final model:** model 5, refit on all training rows. It predicts every cell-month 2012–2026 from S-NPP, using NOAA-20 when S-NPP is missing or flagged, and as the main source from 2026-11, when S-NPP stopped.
 - **Agreement with observed Aqua** over 2012-01..2023-01 (133 months): global monthly correlation 0.991; total −0.6 %; median monthly difference 1.2 %.
 - **NOAA-20 vs S-NPP:** predictions from each agree within 0.2–1.4 % per year.

@@ -48,7 +48,8 @@ python scripts/train.py --stage cv,backtest,ablation --threads 60 --tag v1 --upl
 python scripts/train.py --stage final --threads 20 --tag v1 --upload
 python scripts/train.py --stage cv,backtest,final --drop-groups fire_weather,phenology --tag v2 --upload  # reduced model
 # 5. harmonized 2002-2026 record + burning calendar (+ CSV for the website)
-python scripts/build_calendar.py --pred-tag v1 --upload
+python scripts/build_calendar.py --pred-tag v2 --upload        # v2 = product model
+python scripts/make_figures.py v2                                # docs/figures
 # 6. shared benchmark for comparing any other model (e.g. a CNN) on the same rows
 python scripts/score_predictions.py export --years 2019-2021 --out benchmark_2019_2021.parquet
 python scripts/score_predictions.py score --pred my_preds.parquet --name cnn
