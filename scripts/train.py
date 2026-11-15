@@ -91,9 +91,17 @@ def load_years(cfg, grid, years, cache: Path, sample_cells: float | None, seed: 
     return pd.concat(parts, ignore_index=True)
 
 
+def dim_of(ym) -> np.ndarray:
+    """Days in month for yyyymm integers, via a small lookup (no per-row date strings)."""
+    ym = np.asarray(ym)
+    u, inv = np.unique(ym, return_inverse=True)
+    days = pd.to_datetime((u * 100 + 1).astype(str), format="%Y%m%d").days_in_month.to_numpy()
+    return days[inv]
+
+
 def usual_obs_per_day(df: pd.DataFrame, x: str) -> pd.Series:
     """Per-cell median observed tile-days per calendar day over the calibration window."""
-    dim = pd.to_datetime((df.ym * 100 + 1).astype(str), format="%Y%m%d").dt.days_in_month
+    dim = dim_of(df.ym.to_numpy())
     r = (df[f"{x}_obs"] / dim)[df.in_calib & (df[f"{x}_obs"] > 0)]
     return r.groupby(df.cell[r.index]).median()
 
@@ -103,7 +111,7 @@ def add_features(df: pd.DataFrame, src: str, usual: pd.Series) -> pd.DataFrame:
     out = pd.DataFrame(index=df.index)
     for v in SENS:
         out[f"v_{v}"] = df[f"{src}_{v}"].astype(np.float32)
-    dim = pd.to_datetime((df.ym * 100 + 1).astype(str), format="%Y%m%d").dt.days_in_month.to_numpy()
+    dim = dim_of(df.ym.to_numpy())
     expected = df.cell.map(usual).to_numpy() * dim
     out["v_rate"] = (1e4 * out.v_fire / out.v_clear.where(out.v_clear > 0)).astype(np.float32)
     out["v_frp_per_fire"] = (out.v_frp / out.v_fire.where(out.v_fire > 0)).astype(np.float32)
@@ -135,7 +143,7 @@ def glm_frame(X: pd.DataFrame, med: dict) -> pd.DataFrame:
 
 
 def training_rows(df: pd.DataFrame, usual_a: pd.Series, usual_s: pd.Series) -> pd.Series:
-    dim = pd.to_datetime((df.ym * 100 + 1).astype(str), format="%Y%m%d").dt.days_in_month.to_numpy()
+    dim = dim_of(df.ym.to_numpy())
     comp_a = df.a_obs / (df.cell.map(usual_a).to_numpy() * dim)
     comp_s = df.s_obs / (df.cell.map(usual_s).to_numpy() * dim)
     return (df.in_calib & df.a_month_ok & df.s_month_ok & df.a_frp_ok & df.s_frp_ok
