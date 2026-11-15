@@ -52,6 +52,7 @@ GROUPS = {
 }
 VIIRS_FEATS = ["v_rate", "v_fire", "v_frp_per_fire", "v_cloud_frac", "v_obs_frac", "persistent"]
 FULL_FEATS = VIIRS_FEATS + [f for g in GROUPS.values() for f in g]
+ALL_COVS = [f for g in GROUPS.values() for f in g]   # built for every run (GLM uses some), even if a group is dropped
 GLM_FEATS = ["v_rate", "v_frp_per_fire", "v_cloud_frac", "ndvi_lag1", "tair_c", "fwi_mean", "fwi_missing", "abs_lat"]
 LC_CLASSES = GROUPS["landcover"][:-1]
 TABLE_COLS = (["cell", "ym", "year", "month", "lat", "lon", "fold", "persistent", "in_calib",
@@ -121,7 +122,7 @@ def add_features(df: pd.DataFrame, src: str, usual: pd.Series) -> pd.DataFrame:
     out["exposure_full"] = (out.v_clear * np.clip(1 / out.v_obs_frac.where(out.v_obs_frac > 0), 1, EXPOSURE_SCALE_MAX)).astype(np.float32)
     out["ndvi_lag1"] = df[f"ndvi_{src}_lag1"].fillna(df[f"ndvi_{'j' if src == 's' else 's'}_lag1"])
     out["evi_lag1"] = df[f"evi_{src}_lag1"].fillna(df[f"evi_{'j' if src == 's' else 's'}_lag1"])
-    for f in FULL_FEATS:
+    for f in ALL_COVS:
         if f not in out and f in df:
             out[f] = df[f]
     out["persistent"] = df.persistent.astype(np.float32)
@@ -259,6 +260,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--stage", default="all", help="all, or a comma list of: cv, backtest, ablation, final")
     ap.add_argument("--threads", type=int, default=0, help="LightGBM threads (0 = all cores)")
+    ap.add_argument("--drop-groups", default="", help="comma list of feature groups to leave out (e.g. fire_weather,phenology)")
     ap.add_argument("--sample-cells", type=float, default=None, help="fraction of cells (for quick tests)")
     ap.add_argument("--rounds", type=int, default=600)
     ap.add_argument("--cache", default=str(ROOT / "cache"))
@@ -272,6 +274,13 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
     seed = cfg["cv"]["seed"]
     stages = ["cv", "backtest", "ablation", "final"] if args.stage == "all" else args.stage.split(",")
+    global FULL_FEATS
+    drop = [g for g in args.drop_groups.split(",") if g]
+    for g in drop:
+        if g not in GROUPS:
+            raise SystemExit(f"unknown group {g}; choose from {list(GROUPS)}")
+        FULL_FEATS = [f for f in FULL_FEATS if f not in GROUPS[g]]
+        del GROUPS[g]
     LGBM_EXTRA["num_threads"] = args.threads
 
     log("loading calibration years 2012-2023")
@@ -287,7 +296,7 @@ def main():
     log(f"training rows {len(F):,} of {int(df.in_calib.sum()):,} calibration rows; "
         f"Aqua fires {F.y.sum():,.0f}, S-NPP fires {F.v_fire.sum():,.0f}")
     del df
-    meta = {"tag": args.tag, "rows": int(len(F)), "sample_cells": args.sample_cells, "rounds": args.rounds,
+    meta = {"tag": args.tag, "dropped_groups": drop, "rows": int(len(F)), "sample_cells": args.sample_cells, "rounds": args.rounds,
             "features_full": FULL_FEATS, "features_viirs": VIIRS_FEATS, "glm": GLM_FEATS, "medians": med,
             "min_complete": MIN_COMPLETE}
     results = {}
