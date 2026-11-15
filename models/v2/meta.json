@@ -1,0 +1,65 @@
+{
+ "tag": "v2",
+ "dropped_groups": [
+  "fire_weather",
+  "phenology"
+ ],
+ "rows": 27703746,
+ "sample_cells": null,
+ "rounds": 600,
+ "features_full": [
+  "v_rate",
+  "v_fire",
+  "v_frp_per_fire",
+  "v_cloud_frac",
+  "v_obs_frac",
+  "persistent",
+  "tair_c",
+  "precip_mm_day",
+  "soilmoist_0_10_kgm2",
+  "rootmoist_kgm2",
+  "rh_pct",
+  "vpd_kpa",
+  "wind_ms",
+  "ndvi_lag1",
+  "evi_lag1",
+  "lc_forest",
+  "lc_shrub",
+  "lc_savanna",
+  "lc_grass",
+  "lc_wetland",
+  "lc_crop",
+  "lc_urban",
+  "lc_barren_snow",
+  "land_frac",
+  "lat",
+  "lon",
+  "month"
+ ],
+ "features_viirs": [
+  "v_rate",
+  "v_fire",
+  "v_frp_per_fire",
+  "v_cloud_frac",
+  "v_obs_frac",
+  "persistent"
+ ],
+ "glm": [
+  "v_rate",
+  "v_frp_per_fire",
+  "v_cloud_frac",
+  "ndvi_lag1",
+  "tair_c",
+  "fwi_mean",
+  "fwi_missing",
+  "abs_lat"
+ ],
+ "medians": {
+  "v_cloud_frac": 0.1342449188232422,
+  "ndvi_lag1": 0.4027270972728729,
+  "tair_c": 15.449823379516602
+ },
+ "min_complete": 0.9,
+ "chosen_by_1se": "5_lgbm_full",
+ "global_ratio": 1.19986891746521
+}
